@@ -15,6 +15,7 @@ export default function NewAppointmentPage() {
   const [selectedDoctor, setSelectedDoctor] = useState<any>(null)
   const [showPatientSearch, setShowPatientSearch] = useState(true)
   const [sendingEmail, setSendingEmail] = useState(false)
+  const [clinicId, setClinicId] = useState<string | null>(null)
   const [formData, setFormData] = useState({
     patient_id: '',
     doctor_id: '',
@@ -30,47 +31,74 @@ export default function NewAppointmentPage() {
   const router = useRouter()
   const supabase = createClient()
 
-  // Check authentication on mount
+  // Check authentication and get clinic on mount
   useEffect(() => {
-    const checkAuth = async () => {
+    const checkAuthAndGetClinic = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) {
         router.push('/login')
+        setCheckingAuth(false)
+        return
       }
+
+      // Get the user's clinic_id
+      const { data: userData, error: userError } = await supabase
+        .from('users')
+        .select('clinic_id')
+        .eq('email', session.user.email)
+        .single()
+
+      if (userError) {
+        console.error('Error fetching user clinic:', userError)
+        setCheckingAuth(false)
+        return
+      }
+
+      if (userData?.clinic_id) {
+        setClinicId(userData.clinic_id)
+        // Fetch doctors after getting clinic_id
+        await fetchDoctors(userData.clinic_id)
+      }
+
       setCheckingAuth(false)
     }
-    checkAuth()
+    checkAuthAndGetClinic()
   }, [router, supabase])
 
-  // Fetch doctors on mount
-  useEffect(() => {
-    const fetchDoctors = async () => {
-      const { data } = await supabase
-        .from('users')
-        .select('id, first_name, last_name, email')
-        .eq('role', 'doctor')
-        .eq('is_active', true)
-      setDoctors(data || [])
-    }
-    fetchDoctors()
-  }, [])
+  // Fetch doctors filtered by clinic
+  async function fetchDoctors(clinicId: string) {
+    const { data } = await supabase
+      .from('users')
+      .select('id, first_name, last_name, email')
+      .eq('role', 'doctor')
+      .eq('clinic_id', clinicId)  // ← Filter by clinic
+      .eq('is_active', true)
 
-  // Search patients
-  useEffect(() => {
-    if (searchTerm.length > 2 && !checkingAuth) {
-      searchPatients()
+    if (data) {
+      setDoctors(data)
     }
-  }, [searchTerm, checkingAuth])
+  }
 
+  // Search patients (also filtered by clinic)
   async function searchPatients() {
+    if (!clinicId) return
+
     const { data } = await supabase
       .from('patients')
       .select('*')
+      .eq('clinic_id', clinicId)  // ← Filter patients by clinic
       .or(`first_name.ilike.%${searchTerm}%,last_name.ilike.%${searchTerm}%,phone.ilike.%${searchTerm}%`)
       .limit(10)
     
     if (data) setPatients(data)
   }
+
+  // Search patients when search term changes
+  useEffect(() => {
+    if (searchTerm.length > 2 && !checkingAuth && clinicId) {
+      searchPatients()
+    }
+  }, [searchTerm, checkingAuth, clinicId])
 
   async function sendEmailConfirmation(appointmentId: string, patient: any, appointmentData: any) {
     try {
@@ -286,43 +314,44 @@ export default function NewAppointmentPage() {
               )}
             </div>
 
-            {/* Doctor Selection */}
+            {/* Doctor Selection - Only clinic doctors */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Select Doctor *
               </label>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {doctors.map((doctor) => (
-                  <button
-                    key={doctor.id}
-                    type="button"
-                    onClick={() => selectDoctor(doctor)}
-                    className={`p-4 border-2 rounded-lg text-left transition-all ${
-                      selectedDoctor?.id === doctor.id
-                        ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200'
-                        : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
-                        <span className="text-xl">👨‍⚕️</span>
-                      </div>
-                      <div>
-                        <div className="font-semibold text-gray-800">
-                          Dr. {doctor.first_name} {doctor.last_name}
+              {doctors.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {doctors.map((doctor) => (
+                    <button
+                      key={doctor.id}
+                      type="button"
+                      onClick={() => selectDoctor(doctor)}
+                      className={`p-4 border-2 rounded-lg text-left transition-all ${
+                        selectedDoctor?.id === doctor.id
+                          ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-200'
+                          : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
+                          <span className="text-xl">👨‍⚕️</span>
                         </div>
-                        <div className="text-sm text-gray-500">{doctor.email}</div>
+                        <div>
+                          <div className="font-semibold text-gray-800">
+                            Dr. {doctor.first_name} {doctor.last_name}
+                          </div>
+                          <div className="text-sm text-gray-500">{doctor.email}</div>
+                        </div>
+                        {selectedDoctor?.id === doctor.id && (
+                          <div className="ml-auto text-blue-600">✓</div>
+                        )}
                       </div>
-                      {selectedDoctor?.id === doctor.id && (
-                        <div className="ml-auto text-blue-600">✓</div>
-                      )}
-                    </div>
-                  </button>
-                ))}
-              </div>
-              {doctors.length === 0 && (
+                    </button>
+                  ))}
+                </div>
+              ) : (
                 <div className="text-center p-4 bg-yellow-50 rounded-lg text-yellow-700">
-                  No doctors found. Please add doctors to the system first.
+                  ⚠️ No doctors found for your clinic. Please contact your administrator.
                 </div>
               )}
             </div>
@@ -455,11 +484,18 @@ export default function NewAppointmentPage() {
               </div>
             )}
 
+            {/* Clinic Info */}
+            {clinicId && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">
+                🏥 Scheduling for your clinic (ID: {clinicId})
+              </div>
+            )}
+
             {/* Buttons */}
             <div className="flex gap-3 pt-4">
               <button
                 type="submit"
-                disabled={loading || !formData.patient_id || !formData.doctor_id}
+                disabled={loading || !formData.patient_id || !formData.doctor_id || doctors.length === 0}
                 className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition font-medium"
               >
                 {loading ? (

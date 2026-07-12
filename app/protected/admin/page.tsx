@@ -12,6 +12,7 @@ export default function AdminPanel() {
   const [loading, setLoading] = useState(true)
   const [isAdmin, setIsAdmin] = useState(false)
   const [showAddUser, setShowAddUser] = useState(false)
+  const [showAddClinic, setShowAddClinic] = useState(false)
   const [editingUser, setEditingUser] = useState<any>(null)
   const [formData, setFormData] = useState({
     email: '',
@@ -21,6 +22,13 @@ export default function AdminPanel() {
     role: 'receptionist',
     clinic_id: ''
   })
+  const [clinicFormData, setClinicFormData] = useState({
+    name: '',
+    subscription_plan: 'free',
+    subscription_expires_at: '',
+    is_active: true
+  })
+  const [notification, setNotification] = useState<{type: 'success' | 'error' | 'info', message: string} | null>(null)
   
   const router = useRouter()
   const supabase = createClient()
@@ -28,6 +36,14 @@ export default function AdminPanel() {
   useEffect(() => {
     checkAdminAndLoadData()
   }, [])
+
+  // Auto-dismiss notifications after 5 seconds
+  useEffect(() => {
+    if (notification) {
+      const timer = setTimeout(() => setNotification(null), 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [notification])
 
   async function checkAdminAndLoadData() {
     setLoading(true)
@@ -73,10 +89,113 @@ export default function AdminPanel() {
 
     const { data: subsData } = await supabase
       .from('clinics')
-      .select('name, subscription_plan, subscription_expires_at, is_active')
+      .select('*')
+      .order('created_at', { ascending: false })
 
     setSubscriptions(subsData || [])
     setLoading(false)
+  }
+
+  // CONFIRM USER FUNCTION - Updates both users table AND auth system
+  async function handleConfirmUser(userId: string, email: string) {
+    if (!confirm(`Confirm email for "${email}"? The user will be able to log in immediately.`)) return
+
+    setLoading(true)
+    try {
+      // Step 1: Update users table
+      const { error: userError } = await supabase
+        .from('users')
+        .update({ 
+          confirmed_at: new Date().toISOString()
+        })
+        .eq('id', userId)
+
+      if (userError) throw userError
+
+      // Step 2: Update auth system via API
+      const response = await fetch('/api/admin/confirm-auth', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email })
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to confirm user in auth system')
+      }
+
+      setNotification({
+        type: 'success',
+        message: `✅ Email confirmed for ${email}! User can now log in.`
+      })
+      
+      // Reload users to update the list
+      await loadData()
+    } catch (error: any) {
+      console.error('Error confirming user:', error)
+      setNotification({
+        type: 'error',
+        message: 'Error confirming user: ' + error.message
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleAddClinic(e: React.FormEvent) {
+    e.preventDefault()
+    setLoading(true)
+
+    try {
+      const { data: clinicData, error: clinicError } = await supabase
+        .from('clinics')
+        .insert({
+          name: clinicFormData.name,
+          subscription_plan: clinicFormData.subscription_plan,
+          subscription_expires_at: clinicFormData.subscription_expires_at || null,
+          is_active: clinicFormData.is_active
+        })
+        .select()
+        .single()
+
+      if (clinicError) throw clinicError
+
+      const { error: settingsError } = await supabase
+        .from('clinic_settings')
+        .insert({
+          clinic_id: clinicData.id,
+          timezone: 'UTC',
+          currency: 'USD',
+          date_format: 'MM/DD/YYYY',
+          time_format: '12h'
+        })
+
+      if (settingsError) throw settingsError
+
+      setNotification({
+        type: 'success',
+        message: `✓ Clinic "${clinicFormData.name}" created successfully!`
+      })
+      setShowAddClinic(false)
+      setClinicFormData({
+        name: '',
+        subscription_plan: 'free',
+        subscription_expires_at: '',
+        is_active: true
+      })
+      await loadData()
+    } catch (error: any) {
+      console.error('Error adding clinic:', error)
+      setNotification({
+        type: 'error',
+        message: 'Error: ' + error.message
+      })
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function handleAddUser(e: React.FormEvent) {
@@ -84,6 +203,18 @@ export default function AdminPanel() {
     setLoading(true)
 
     try {
+      // Check if user already exists
+      const { data: existingUser } = await supabase
+        .from('users')
+        .select('email')
+        .eq('email', formData.email)
+        .single()
+
+      if (existingUser) {
+        throw new Error('User with this email already exists')
+      }
+
+      // Create auth user
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: formData.email,
         password: formData.password,
@@ -96,9 +227,15 @@ export default function AdminPanel() {
         }
       })
 
-      if (authError) throw authError
+      if (authError) {
+        if (authError.message.includes('User already registered')) {
+          throw new Error('This email is already registered. Please use a different email.')
+        }
+        throw authError
+      }
 
       if (authData.user) {
+        // Create the user profile - confirmed_at is NULL (pending)
         const { error: userError } = await supabase
           .from('users')
           .insert({
@@ -107,12 +244,20 @@ export default function AdminPanel() {
             first_name: formData.first_name,
             last_name: formData.last_name,
             role: formData.role,
-            clinic_id: formData.clinic_id || null
+            clinic_id: formData.clinic_id || null,
+            confirmed_at: null // User starts as unconfirmed
           })
 
-        if (userError) throw userError
+        if (userError) {
+          console.error('Error creating user profile:', userError)
+          throw new Error('Failed to create user profile. Please try again.')
+        }
 
-        alert(`✓ ${formData.role} created successfully!`)
+        setNotification({
+          type: 'info',
+          message: `✓ User created! Please manually confirm their email in the admin panel before they can log in.`
+        })
+
         setShowAddUser(false)
         setFormData({
           email: '',
@@ -126,7 +271,10 @@ export default function AdminPanel() {
       }
     } catch (error: any) {
       console.error('Error adding user:', error)
-      alert('Error: ' + error.message)
+      setNotification({
+        type: 'error',
+        message: error.message || 'Error creating user. Please try again.'
+      })
     } finally {
       setLoading(false)
     }
@@ -149,18 +297,22 @@ export default function AdminPanel() {
 
       if (error) throw error
 
-      alert('✓ User updated successfully!')
+      setNotification({
+        type: 'success',
+        message: '✓ User updated successfully!'
+      })
       setEditingUser(null)
       await loadData()
     } catch (error: any) {
       console.error('Error updating user:', error)
-      alert('Error: ' + error.message)
+      setNotification({
+        type: 'error',
+        message: 'Error: ' + error.message
+      })
     } finally {
       setLoading(false)
     }
   }
-
-  // Removed resetPassword function - requires admin privileges
 
   async function handleDeleteUser(userId: string, userEmail: string) {
     if (!confirm(`Are you sure you want to delete ${userEmail}? This action cannot be undone.`)) return
@@ -174,28 +326,71 @@ export default function AdminPanel() {
 
       if (userError) throw userError
 
-      alert('✓ User deleted successfully!')
+      setNotification({
+        type: 'success',
+        message: '✓ User deleted successfully!'
+      })
       await loadData()
     } catch (error: any) {
       console.error('Error deleting user:', error)
-      alert('Error: ' + error.message)
+      setNotification({
+        type: 'error',
+        message: 'Error: ' + error.message
+      })
     } finally {
       setLoading(false)
     }
   }
 
-  async function toggleClinicStatus(clinicName: string, currentStatus: boolean) {
-    if (confirm(`Toggle status for ${clinicName}?`)) {
+  async function toggleClinicStatus(clinicId: string, currentStatus: boolean) {
+    if (!confirm(`Toggle status for this clinic?`)) return
+    
+    try {
       const { error } = await supabase
         .from('clinics')
         .update({ is_active: !currentStatus })
-        .eq('name', clinicName)
+        .eq('id', clinicId)
       
-      if (error) {
-        alert('Error updating clinic status: ' + error.message)
-      } else {
-        await loadData()
-      }
+      if (error) throw error
+      
+      await loadData()
+      setNotification({
+        type: 'success',
+        message: '✓ Clinic status updated successfully!'
+      })
+    } catch (error: any) {
+      setNotification({
+        type: 'error',
+        message: 'Error updating clinic status: ' + error.message
+      })
+    }
+  }
+
+  async function deleteClinic(clinicId: string, clinicName: string) {
+    if (!confirm(`Are you sure you want to delete "${clinicName}"? This will also delete all associated data. This action cannot be undone!`)) return
+
+    setLoading(true)
+    try {
+      const { error } = await supabase
+        .from('clinics')
+        .delete()
+        .eq('id', clinicId)
+
+      if (error) throw error
+
+      setNotification({
+        type: 'success',
+        message: `✓ Clinic "${clinicName}" deleted successfully!`
+      })
+      await loadData()
+    } catch (error: any) {
+      console.error('Error deleting clinic:', error)
+      setNotification({
+        type: 'error',
+        message: 'Error: ' + error.message
+      })
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -214,6 +409,15 @@ export default function AdminPanel() {
       case 'doctor': return '👨‍⚕️'
       case 'receptionist': return '💁'
       default: return '👤'
+    }
+  }
+
+  const getPlanBadgeColor = (plan: string) => {
+    switch(plan?.toLowerCase()) {
+      case 'premium': return 'bg-purple-100 text-purple-800'
+      case 'professional': return 'bg-blue-100 text-blue-800'
+      case 'basic': return 'bg-green-100 text-green-800'
+      default: return 'bg-gray-100 text-gray-800'
     }
   }
 
@@ -243,6 +447,25 @@ export default function AdminPanel() {
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-7xl mx-auto px-4 py-6">
+        {/* Notification */}
+        {notification && (
+          <div className={`mb-4 p-4 rounded-lg ${
+            notification.type === 'success' ? 'bg-green-50 border border-green-200 text-green-800' :
+            notification.type === 'error' ? 'bg-red-50 border border-red-200 text-red-800' :
+            'bg-blue-50 border border-blue-200 text-blue-800'
+          }`}>
+            <div className="flex items-center justify-between">
+              <span>{notification.message}</span>
+              <button
+                onClick={() => setNotification(null)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Header */}
         <div className="mb-6">
           <div className="flex justify-between items-center">
@@ -250,7 +473,14 @@ export default function AdminPanel() {
               <h1 className="text-2xl font-bold text-gray-800">Admin Panel</h1>
               <p className="text-gray-500">System Administration Dashboard</p>
             </div>
-            <div className="flex gap-3">
+            <div className="flex gap-3 flex-wrap">
+              <button
+                onClick={() => setShowAddClinic(true)}
+                className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm"
+              >
+                <span>🏥</span>
+                Add New Clinic
+              </button>
               <button
                 onClick={() => setShowAddUser(true)}
                 className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 shadow-sm"
@@ -284,10 +514,20 @@ export default function AdminPanel() {
           <div className="bg-white rounded-lg shadow p-4">
             <div className="flex items-center justify-between">
               <div>
+                <p className="text-sm text-gray-500">Total Clinics</p>
+                <p className="text-2xl font-bold">{subscriptions.length}</p>
+              </div>
+              <div className="text-2xl text-blue-500">🏥</div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg shadow p-4">
+            <div className="flex items-center justify-between">
+              <div>
                 <p className="text-sm text-gray-500">Active Clinics</p>
                 <p className="text-2xl font-bold">{activeClinics}</p>
               </div>
-              <div className="text-2xl text-green-500">🏥</div>
+              <div className="text-2xl text-green-500">✅</div>
             </div>
           </div>
 
@@ -300,20 +540,6 @@ export default function AdminPanel() {
               <div className="text-2xl">⚠️</div>
             </div>
           </div>
-
-          <Link 
-            href="/protected/admin/monitoring"
-            className="bg-blue-50 border border-blue-200 rounded-lg shadow p-4 hover:shadow-md transition cursor-pointer block"
-          >
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-blue-600">System Health</p>
-                <p className="text-2xl font-bold text-blue-700">Monitor</p>
-                <p className="text-xs text-gray-500 mt-1">View database stats</p>
-              </div>
-              <div className="text-3xl text-blue-500">📊</div>
-            </div>
-          </Link>
         </div>
 
         {/* Users Table */}
@@ -336,7 +562,7 @@ export default function AdminPanel() {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Clinic</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Joined</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
@@ -366,11 +592,24 @@ export default function AdminPanel() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                       {user.clinics?.name || 'N/A'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                      {new Date(user.created_at).toLocaleDateString()}
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                        user.confirmed_at ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'
+                      }`}>
+                        {user.confirmed_at ? '✅ Confirmed' : '⏳ Pending'}
+                      </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       <div className="flex gap-2">
+                        {!user.confirmed_at && user.role !== 'owner' && (
+                          <button
+                            onClick={() => handleConfirmUser(user.id, user.email)}
+                            className="text-green-600 hover:text-green-900 font-medium"
+                            title="Confirm Email"
+                          >
+                            ✅ Confirm
+                          </button>
+                        )}
                         <button
                           onClick={() => setEditingUser(user)}
                           className="text-blue-600 hover:text-blue-900"
@@ -378,7 +617,6 @@ export default function AdminPanel() {
                         >
                           ✏️ Edit
                         </button>
-                        {/* Reset Password button removed - requires admin privileges */}
                         {user.role !== 'owner' && (
                           <button
                             onClick={() => handleDeleteUser(user.id, user.email)}
@@ -397,8 +635,97 @@ export default function AdminPanel() {
           </div>
         </div>
 
+        {/* Clinics & Subscriptions Table */}
+        <div className="bg-white rounded-lg shadow overflow-hidden mt-6">
+          <div className="px-4 py-3 border-b bg-gray-50 flex justify-between items-center">
+            <h2 className="font-semibold text-gray-800">🏥 Clinics & Subscriptions</h2>
+            <button
+              onClick={() => setShowAddClinic(true)}
+              className="bg-purple-600 text-white px-3 py-1 rounded text-sm hover:bg-purple-700"
+            >
+              + Add Clinic
+            </button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Clinic Name</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Plan</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Expires</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Created</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {subscriptions.map((clinic: any) => {
+                  const daysLeft = clinic.subscription_expires_at 
+                    ? Math.ceil((new Date(clinic.subscription_expires_at).getTime() - new Date().getTime()) / (1000 * 3600 * 24))
+                    : null
+                  const isExpiring = daysLeft !== null && daysLeft <= 7 && daysLeft > 0
+                  
+                  return (
+                    <tr key={clinic.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-sm">{clinic.name}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${getPlanBadgeColor(clinic.subscription_plan)}`}>
+                          {clinic.subscription_plan || 'Free'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-sm">
+                        {clinic.subscription_expires_at 
+                          ? new Date(clinic.subscription_expires_at).toLocaleDateString()
+                          : 'Never'}
+                        {daysLeft !== null && daysLeft > 0 && (
+                          <span className={`text-xs ml-2 ${isExpiring ? 'text-yellow-600 font-medium' : 'text-gray-400'}`}>
+                            ({daysLeft} days left)
+                          </span>
+                        )}
+                        {daysLeft !== null && daysLeft <= 0 && clinic.subscription_expires_at && (
+                          <span className="text-xs ml-2 text-red-600 font-medium">
+                            (Expired)
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          clinic.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                        }`}>
+                          {clinic.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        {new Date(clinic.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => toggleClinicStatus(clinic.id, clinic.is_active)}
+                            className={`text-sm font-medium ${clinic.is_active ? 'text-red-600 hover:text-red-800' : 'text-green-600 hover:text-green-800'}`}
+                          >
+                            {clinic.is_active ? 'Deactivate' : 'Activate'}
+                          </button>
+                          <button
+                            onClick={() => deleteClinic(clinic.id, clinic.name)}
+                            className="text-sm font-medium text-red-600 hover:text-red-800"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         {/* System Settings Section */}
-        <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="bg-white rounded-lg shadow overflow-hidden mt-6">
           <div className="px-4 py-3 border-b bg-gray-50">
             <h2 className="font-semibold text-gray-800">⚙️ System Settings</h2>
           </div>
@@ -432,9 +759,15 @@ export default function AdminPanel() {
                     .from('system_settings')
                     .upsert(settings)
                   if (error) {
-                    alert('Error saving settings: ' + error.message)
+                    setNotification({
+                      type: 'error',
+                      message: 'Error saving settings: ' + error.message
+                    })
                   } else {
-                    alert('Settings saved successfully!')
+                    setNotification({
+                      type: 'success',
+                      message: 'Settings saved successfully!'
+                    })
                   }
                 }}
                 className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
@@ -444,67 +777,81 @@ export default function AdminPanel() {
             </div>
           </div>
         </div>
+      </div>
 
-        {/* Subscription Overview */}
-        <div className="bg-white rounded-lg shadow overflow-hidden mt-6">
-          <div className="px-4 py-3 border-b bg-gray-50">
-            <h2 className="font-semibold text-gray-800">📋 Subscription Overview</h2>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Clinic</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Plan</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Expires</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {subscriptions.map((clinic: any) => {
-                  const daysLeft = clinic.subscription_expires_at 
-                    ? Math.ceil((new Date(clinic.subscription_expires_at).getTime() - new Date().getTime()) / (1000 * 3600 * 24))
-                    : null
-                  const isExpiring = daysLeft !== null && daysLeft <= 7 && daysLeft > 0
-                  
-                  return (
-                    <tr key={clinic.name}>
-                      <td className="px-4 py-3 text-sm font-medium">{clinic.name}</td>
-                      <td className="px-4 py-3 text-sm capitalize">{clinic.subscription_plan || 'Free'}</td>
-                      <td className="px-4 py-3 text-sm">
-                        {clinic.subscription_expires_at 
-                          ? new Date(clinic.subscription_expires_at).toLocaleDateString()
-                          : 'N/A'}
-                        {daysLeft !== null && daysLeft > 0 && (
-                          <span className={`text-xs ml-2 ${isExpiring ? 'text-yellow-600 font-medium' : 'text-gray-400'}`}>
-                            ({daysLeft} days left)
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          clinic.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-                        }`}>
-                          {clinic.is_active ? 'Active' : 'Inactive'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <button
-                          onClick={() => toggleClinicStatus(clinic.name, clinic.is_active)}
-                          className={`text-sm font-medium ${clinic.is_active ? 'text-red-600 hover:text-red-800' : 'text-green-600 hover:text-green-800'}`}
-                        >
-                          {clinic.is_active ? 'Deactivate' : 'Activate'}
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+      {/* Add Clinic Modal */}
+      {showAddClinic && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h2 className="text-xl font-bold mb-4">🏥 Add New Clinic</h2>
+            <form onSubmit={handleAddClinic}>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Clinic Name *</label>
+                  <input
+                    type="text"
+                    required
+                    className="w-full px-3 py-2 border rounded-lg"
+                    value={clinicFormData.name}
+                    onChange={(e) => setClinicFormData({...clinicFormData, name: e.target.value})}
+                    placeholder="e.g., Downtown Dental Clinic"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Subscription Plan</label>
+                  <select
+                    className="w-full px-3 py-2 border rounded-lg"
+                    value={clinicFormData.subscription_plan}
+                    onChange={(e) => setClinicFormData({...clinicFormData, subscription_plan: e.target.value})}
+                  >
+                    <option value="free">Free</option>
+                    <option value="basic">Basic</option>
+                    <option value="professional">Professional</option>
+                    <option value="premium">Premium</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Subscription Expiry Date</label>
+                  <input
+                    type="date"
+                    className="w-full px-3 py-2 border rounded-lg"
+                    value={clinicFormData.subscription_expires_at}
+                    onChange={(e) => setClinicFormData({...clinicFormData, subscription_expires_at: e.target.value})}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Leave empty for unlimited or trial</p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Status</label>
+                  <select
+                    className="w-full px-3 py-2 border rounded-lg"
+                    value={clinicFormData.is_active ? 'active' : 'inactive'}
+                    onChange={(e) => setClinicFormData({...clinicFormData, is_active: e.target.value === 'active'})}
+                  >
+                    <option value="active">Active</option>
+                    <option value="inactive">Inactive</option>
+                  </select>
+                </div>
+              </div>
+              <div className="flex gap-3 mt-6">
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="flex-1 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50"
+                >
+                  {loading ? 'Creating...' : 'Create Clinic'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAddClinic(false)}
+                  className="flex-1 bg-gray-300 px-4 py-2 rounded-lg hover:bg-gray-400"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Add User Modal */}
       {showAddUser && (
@@ -574,7 +921,7 @@ export default function AdminPanel() {
                   >
                     <option value="">Select Clinic</option>
                     {subscriptions.map(clinic => (
-                      <option key={clinic.name} value={clinic.name}>
+                      <option key={clinic.id} value={clinic.id}>
                         {clinic.name}
                       </option>
                     ))}
@@ -650,7 +997,7 @@ export default function AdminPanel() {
                   >
                     <option value="">Select Clinic</option>
                     {subscriptions.map(clinic => (
-                      <option key={clinic.name} value={clinic.name}>
+                      <option key={clinic.id} value={clinic.id}>
                         {clinic.name}
                       </option>
                     ))}

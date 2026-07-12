@@ -19,15 +19,19 @@ export default function AppointmentCalendar({ clinicId }: AppointmentCalendarPro
   const supabase = createClient()
 
   useEffect(() => {
-    fetchDoctors()
-    fetchAppointments()
-  }, [])
+    if (clinicId) {
+      fetchDoctors()
+      fetchAppointments()
+    }
+  }, [clinicId])
 
   async function fetchDoctors() {
+    // FIX: Filter doctors by clinicId
     const { data } = await supabase
       .from('users')
       .select('id, first_name, last_name')
       .eq('role', 'doctor')
+      .eq('clinic_id', clinicId)  // ← Added this filter
       .eq('is_active', true)
 
     if (data) {
@@ -388,18 +392,22 @@ export default function AppointmentCalendar({ clinicId }: AppointmentCalendarPro
         </div>
       </div>
 
-      {/* Legend - Doctors are main colors, status is small dot */}
+      {/* Legend - Only show doctors from this clinic */}
       <div className="px-4 pt-3 pb-2 border-b flex flex-wrap gap-4 items-center">
         <span className="text-sm font-medium text-gray-700">Doctors:</span>
-        {doctors.map((doctor, idx) => {
-          const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-purple-500', 'bg-orange-500']
-          return (
-            <div key={doctor.id} className="flex items-center gap-2">
-              <div className={`w-4 h-4 rounded-full ${colors[idx % colors.length]}`} />
-              <span className="text-sm text-gray-600">Dr. {doctor.first_name} {doctor.last_name}</span>
-            </div>
-          )
-        })}
+        {doctors.length > 0 ? (
+          doctors.map((doctor, idx) => {
+            const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-purple-500', 'bg-orange-500']
+            return (
+              <div key={doctor.id} className="flex items-center gap-2">
+                <div className={`w-4 h-4 rounded-full ${colors[idx % colors.length]}`} />
+                <span className="text-sm text-gray-600">Dr. {doctor.first_name} {doctor.last_name}</span>
+              </div>
+            )
+          })
+        ) : (
+          <span className="text-sm text-gray-400">No doctors assigned to this clinic</span>
+        )}
         <div className="w-px h-5 bg-gray-300 mx-2"></div>
         <span className="text-sm font-medium text-gray-700">Status:</span>
         <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-500"></div><span className="text-xs text-gray-500">Completed</span></div>
@@ -412,7 +420,7 @@ export default function AppointmentCalendar({ clinicId }: AppointmentCalendarPro
       {view === 'month' && <MonthView />}
       {view === 'day' && <DailyView />}
 
-      {/* Appointment Details Modal - Keep as is */}
+      {/* Appointment Details Modal */}
       {selectedAppointment && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-xl max-w-md w-full mx-4 p-6 max-h-[90vh] overflow-y-auto">

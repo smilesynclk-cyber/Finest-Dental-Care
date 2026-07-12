@@ -363,7 +363,7 @@ export default function DoctorDashboard() {
         <div className="mt-8 text-center pt-6 border-t border-gray-200">
           <div className="flex items-center justify-center gap-2 text-gray-400 text-sm">
             <span>🦷</span>
-            <span>Finest Dental Care Management System</span>
+            <span>Smile Sync Dental Clinic Management System</span>
             <span>🦷</span>
           </div>
         </div>

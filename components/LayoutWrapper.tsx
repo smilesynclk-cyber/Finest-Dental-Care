@@ -28,15 +28,22 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
     getUser()
   }, [])
 
+  // Check if we're on the landing page, login page, or protected routes
   const isLoginPage = pathname === '/login'
+  const isLandingPage = pathname === '/'
+  const isProtectedRoute = pathname?.startsWith('/protected')
   
-  if (isLoginPage) {
+  // Only show header on protected routes (not on landing or login)
+  const showHeader = isProtectedRoute
+
+  // If we're on landing page or login page, just render children without any wrapper
+  if (isLandingPage || isLoginPage || !showHeader) {
     return <>{children}</>
   }
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Navigation */}
+      {/* Navigation - Only shows on protected routes */}
       <nav className="bg-white border-b border-gray-200 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-16">
@@ -50,7 +57,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
                   e.currentTarget.style.display = 'none'
                 }}
               />
-              <span className="font-semibold text-gray-800">Finest Dental Care</span>
+              <span className="font-semibold text-gray-800">Smile Sync Dental Clinic Management System</span>
             </div>
             
             {/* Right Side */}
@@ -68,15 +75,15 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
               
               {/* Admin Button */}
               {userRole === 'owner' && (
-  <>
-    <Link href="/protected/admin" className="px-3 py-1.5 text-sm font-medium text-white bg-purple-600 rounded-lg">
-      👑 Admin Panel
-    </Link>
-    <Link href="/protected/admin/monitoring" className="px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-lg">
-      📊 Monitoring
-    </Link>
-  </>
-)}
+                <>
+                  <Link href="/protected/admin" className="px-3 py-1.5 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 transition">
+                    👑 Admin Panel
+                  </Link>
+                  <Link href="/protected/admin/monitoring" className="px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition">
+                    📊 Monitoring
+                  </Link>
+                </>
+              )}
               
               {/* Logout Button */}
               <form action="/api/auth/logout" method="post">
