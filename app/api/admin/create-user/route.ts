@@ -1,9 +1,12 @@
-import { supabaseAdmin } from '@/lib/admin'
+// app/api/admin/create-user/route.ts
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/server'
 
 export async function POST(request: Request) {
   try {
+    // ✅ Dynamic imports - only load when API is called
+    const { supabaseAdmin } = await import('@/lib/admin')
+    const { createClient } = await import('@/lib/server')
+
     const body = await request.json()
     const { email, password, firstName, lastName, role, clinicId } = body
 
