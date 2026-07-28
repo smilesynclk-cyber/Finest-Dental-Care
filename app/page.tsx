@@ -1,20 +1,33 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
-import { useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { createClient } from '@/lib/client'
+import { useRouter } from 'next/navigation'
+import Image from 'next/image'
 
 export default function HomePage() {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [isMounted, setIsMounted] = useState(false)
+  const [warning, setWarning] = useState('')
+  
+  const [showResetModal, setShowResetModal] = useState(false)
+  const [resetEmail, setResetEmail] = useState('')
+  const [resetLoading, setResetLoading] = useState(false)
+  const [resetError, setResetError] = useState('')
+  const [resetSuccess, setResetSuccess] = useState('')
+  
   const router = useRouter()
+  const supabase = createClient()
 
   useEffect(() => {
-    // Check if user is already logged in
+    setIsMounted(true)
+    
     const checkSession = async () => {
-      const supabase = createClient()
       const { data: { session } } = await supabase.auth.getSession()
-      
       if (session) {
-        // If logged in, redirect to dashboard based on role
         const { data: userData } = await supabase
           .from('users')
           .select('role')
@@ -32,320 +45,363 @@ export default function HomePage() {
     }
     
     checkSession()
-  }, [router])
+  }, [router, supabase])
+
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault()
+    setLoading(true)
+    setError('')
+    setWarning('')
+
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    })
+
+    if (authError) {
+      setError(authError.message)
+      setLoading(false)
+      return
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 1500))
+
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('email, role, clinic_id, first_name, last_name')
+      .eq('email', email)
+      .maybeSingle()
+
+    if (userError || !userData) {
+      setError('User account not found. Please contact administrator.')
+      await supabase.auth.signOut()
+      setLoading(false)
+      return
+    }
+
+    if (!userData.clinic_id) {
+      setError('Account not configured. Please contact administrator.')
+      await supabase.auth.signOut()
+      setLoading(false)
+      return
+    }
+
+    const { data: clinicData, error: clinicError } = await supabase
+      .from('clinics')
+      .select('id, name, is_active, is_trial, trial_end_date')
+      .eq('id', userData.clinic_id)
+      .maybeSingle()
+
+    const isOwnerOrAdmin = userData.role === 'owner' || userData.role === 'admin'
+    const isClinicActive = clinicData ? clinicData.is_active === true : false
+
+    if (!isClinicActive && !isOwnerOrAdmin) {
+      setError('Your clinic account has been deactivated. Please contact your administrator.')
+      await supabase.auth.signOut()
+      setLoading(false)
+      return
+    }
+
+    if (!isClinicActive && isOwnerOrAdmin) {
+      setWarning('⚠️ This clinic is currently deactivated. You can access the system but other users cannot.')
+    }
+
+    if (clinicData && clinicData.is_trial === true && clinicData.trial_end_date && !isOwnerOrAdmin) {
+      const trialEnd = new Date(clinicData.trial_end_date)
+      const today = new Date()
+      const daysLeft = Math.ceil((trialEnd.getTime() - today.getTime()) / (1000 * 3600 * 24))
+      
+      if (daysLeft <= 0) {
+        setError('Your free trial has expired. Please contact the clinic administrator to upgrade.')
+        await supabase.auth.signOut()
+        setLoading(false)
+        return
+      }
+      
+      if (daysLeft <= 3 && daysLeft > 0) {
+        setWarning(`⚠️ Your free trial ends in ${daysLeft} day${daysLeft !== 1 ? 's' : ''}. Please contact the clinic administrator to upgrade.`)
+      }
+    }
+
+    if (userData.role === 'doctor') {
+      router.push('/protected/dashboard/doctor')
+    } else if (userData.role === 'owner' || userData.role === 'admin') {
+      router.push('/protected/admin')
+    } else if (userData.role === 'receptionist') {
+      router.push('/protected/dashboard/reception')
+    } else {
+      router.push('/dashboard')
+    }
+    
+    setLoading(false)
+  }
+
+  async function handleResetPassword(e: React.FormEvent) {
+    e.preventDefault()
+    setResetLoading(true)
+    setResetError('')
+    setResetSuccess('')
+
+    const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
+      redirectTo: `${window.location.origin}/update-password`,
+    })
+
+    if (error) {
+      setResetError(error.message)
+    } else {
+      setResetSuccess('Password reset instructions sent to your email!')
+      setTimeout(() => {
+        setShowResetModal(false)
+        setResetEmail('')
+        setResetSuccess('')
+      }, 3000)
+    }
+    setResetLoading(false)
+  }
+
+  if (!isMounted) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
+        <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-8">
+          <div className="text-center mb-8">
+            <div className="w-24 h-24 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
+              <span className="text-4xl">🦷</span>
+            </div>
+            <div className="animate-pulse">
+              <h1 className="text-2xl font-bold text-gray-800">Welcome Back</h1>
+              <p className="text-gray-500 mt-2">Loading...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className="min-h-screen bg-white">
-      {/* Navigation - Clean Header with Login Button */}
-      <nav className="fixed w-full bg-white/95 backdrop-blur-md z-50 border-b border-gray-100 shadow-sm">
-        <div className="container mx-auto px-4 sm:px-6 py-4 flex justify-between items-center">
-          <div className="flex items-center space-x-2">
-            <span className="text-3xl">🦷</span>
-            <span className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-teal-500 bg-clip-text text-transparent">
-              SmileSync
-            </span>
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 md:p-10 border border-gray-100">
+        <div className="text-center mb-8">
+          <div className="relative">
+            <div className="w-24 h-24 mx-auto mb-4 relative">
+              <Image
+  src="/logo.png"
+  alt="Finest Dental Care"
+  width={96}
+  height={96}
+  className="object-contain rounded-2xl shadow-lg"
+  priority
+/>
+            </div>
+            <div className="absolute -inset-1 bg-gradient-to-r from-blue-400 to-indigo-400 rounded-2xl opacity-20 blur-lg -z-10"></div>
           </div>
-          <div className="hidden md:flex space-x-8 items-center">
-            <a href="/" className="text-blue-600 font-semibold">Home</a>
-            <a href="/features" className="text-gray-600 hover:text-blue-600 transition">Features</a>
-            <a href="/pricing" className="text-gray-600 hover:text-blue-600 transition">Pricing</a>
-            <a href="/about" className="text-gray-600 hover:text-blue-600 transition">About</a>
-            <a href="/contact" className="text-gray-600 hover:text-blue-600 transition">Contact</a>
+          
+          <h1 className="text-2xl font-bold text-gray-800">
+            Smile Sync
+          </h1>
+          <p className="text-sm text-gray-500 mt-1">Dental Clinic Management System</p>
+          <div className="mt-4 h-0.5 w-12 bg-gradient-to-r from-blue-400 to-indigo-400 mx-auto rounded-full"></div>
+          <p className="text-gray-600 mt-4 text-sm font-medium">Sign in to your account</p>
+        </div>
+
+        {warning && (
+          <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-xl animate-shake">
+            <div className="flex items-start gap-3">
+              <span className="text-xl">⚠️</span>
+              <div>
+                <p className="text-sm font-medium text-amber-800">{warning}</p>
+              </div>
+            </div>
           </div>
-          {/* Login Button - Only one in the header */}
-          <button 
-            onClick={() => router.push('/login')}
-            className="bg-gradient-to-r from-blue-600 to-teal-500 text-white px-6 py-2.5 rounded-full hover:shadow-xl transition transform hover:scale-105 font-semibold flex items-center gap-2 shadow-lg shadow-blue-500/30"
+        )}
+
+        <form onSubmit={handleLogin} className="space-y-5">
+          <div className="space-y-1">
+            <label className="block text-sm font-semibold text-gray-700">
+              Email Address
+            </label>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <span className="text-gray-400 text-lg">📧</span>
+              </div>
+              <input
+                type="email"
+                required
+                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all duration-200 bg-gray-50 hover:bg-white"
+                placeholder="Enter your email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <div className="flex justify-between items-center">
+              <label className="block text-sm font-semibold text-gray-700">
+                Password
+              </label>
+            </div>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                <span className="text-gray-400 text-lg">🔒</span>
+              </div>
+              <input
+                type="password"
+                required
+                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all duration-200 bg-gray-50 hover:bg-white"
+                placeholder="Enter your password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </div>
+            <div className="text-right mt-1">
+              <button
+                type="button"
+                onClick={() => setShowResetModal(true)}
+                className="text-xs text-blue-600 hover:text-blue-700 hover:underline transition font-medium"
+              >
+                Forgot Password?
+              </button>
+            </div>
+          </div>
+
+          {error && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 animate-shake">
+              <div className="flex items-start gap-3">
+                <span className="text-xl">❌</span>
+                <div>
+                  <p className="text-sm font-medium text-red-800">{error}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 rounded-xl hover:from-blue-700 hover:to-indigo-700 transition-all duration-200 font-semibold shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40 disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-[1.02] active:scale-[0.98]"
           >
-            <span className="text-lg">🔐</span>
-            <span>Login</span>
-          </button>
-        </div>
-      </nav>
-
-      {/* Hero Section - Removed extra login button */}
-      <section className="pt-32 pb-20 bg-gradient-to-br from-blue-50 via-white to-teal-50 overflow-hidden">
-        <div className="container mx-auto px-6">
-          <div className="max-w-4xl mx-auto text-center">
-            <div className="inline-block bg-blue-100 text-blue-700 px-4 py-2 rounded-full text-sm font-semibold mb-6 animate-pulse">
-              🚀 Now Available Worldwide
-            </div>
-            <h1 className="text-5xl md:text-7xl font-bold mb-6 leading-tight">
-              Transform Your Dental Practice
-              <br />
-              <span className="bg-gradient-to-r from-blue-600 to-teal-500 bg-clip-text text-transparent">
-                With AI That Learns
+            {loading ? (
+              <span className="flex items-center justify-center gap-2">
+                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Signing in...
               </span>
-            </h1>
-            <p className="text-xl text-gray-600 max-w-2xl mx-auto mb-10 leading-relaxed">
-              SmileSync automates admin, predicts no-shows, and gives you 30% more time with patients. 
-              Join 2,500+ clinics already saving time and growing revenue.
+            ) : (
+              'Sign In'
+            )}
+          </button>
+
+          <div className="text-center pt-4 border-t border-gray-100">
+            <p className="text-xs text-gray-400">
+              Secure login • Protected by SSL encryption
             </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <button className="bg-gradient-to-r from-blue-600 to-teal-500 text-white px-8 py-4 rounded-full text-lg font-semibold hover:shadow-xl transition transform hover:scale-105">
-                Start Free Trial
-              </button>
-              <button className="border-2 border-blue-600 text-blue-600 px-8 py-4 rounded-full text-lg font-semibold hover:bg-blue-50 transition transform hover:scale-105">
-                Watch Demo ▶
-              </button>
-            </div>
-            <div className="mt-8 flex flex-wrap items-center justify-center gap-6 text-gray-500">
-              <span className="flex items-center">⭐ 4.8/5 Rating</span>
-              <span className="flex items-center">🌍 40+ Countries</span>
-              <span className="flex items-center">🏆 2,500+ Clinics</span>
-            </div>
           </div>
-        </div>
-      </section>
+        </form>
+      </div>
 
-      {/* Trust Badges */}
-      <section className="py-12 bg-white border-b border-gray-100">
-        <div className="container mx-auto px-6">
-          <p className="text-center text-gray-500 text-sm uppercase tracking-wider mb-6">Trusted by leading dental practices worldwide</p>
-          <div className="flex flex-wrap justify-center items-center gap-12 opacity-60">
-            <span className="text-2xl font-bold text-gray-400">🦷 Finest Dental Care</span>
-            <span className="text-2xl font-bold text-gray-400">⭐ SmileCare</span>
-            <span className="text-2xl font-bold text-gray-400">🏥 MediDent</span>
-            <span className="text-2xl font-bold text-gray-400">💎 Pearl Dental</span>
-            <span className="text-2xl font-bold text-gray-400">🌟 BrightSmile</span>
-          </div>
-        </div>
-      </section>
+      {showResetModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 animate-fadeIn">
+            <div className="text-center mb-6">
+              <div className="w-20 h-20 bg-gradient-to-br from-yellow-400 to-orange-400 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+                <span className="text-4xl">🔐</span>
+              </div>
+              <h2 className="text-2xl font-bold text-gray-800">Reset Password</h2>
+              <p className="text-gray-500 mt-2 text-sm">
+                Enter your email address and we'll send you instructions to reset your password.
+              </p>
+            </div>
 
-      {/* Features */}
-      <section className="py-20 bg-white">
-        <div className="container mx-auto px-6">
-          <div className="text-center mb-16">
-            <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">Features</span>
-            <h2 className="text-4xl font-bold mt-2 mb-4">Why Choose SmileSync?</h2>
-            <p className="text-xl text-gray-600">Everything you need to run a modern dental practice</p>
-          </div>
-          <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto">
-            <div className="group bg-white p-8 rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-300 hover:-translate-y-2 border border-gray-100">
-              <div className="text-6xl mb-4">🤖</div>
-              <h3 className="text-2xl font-bold mb-3">AI Receptionist</h3>
-              <p className="text-gray-600 leading-relaxed">Self-learning voice AI that handles scheduling and patient queries.</p>
-              <div className="mt-4 text-blue-600 font-semibold group-hover:translate-x-2 transition">Learn more →</div>
-            </div>
-            <div className="group bg-white p-8 rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-300 hover:-translate-y-2 border border-gray-100">
-              <div className="text-6xl mb-4">📊</div>
-              <h3 className="text-2xl font-bold mb-3">Analytics & Insights</h3>
-              <p className="text-gray-600 leading-relaxed">Predict trends, reduce no-shows, and increase case acceptance.</p>
-              <div className="mt-4 text-blue-600 font-semibold group-hover:translate-x-2 transition">Learn more →</div>
-            </div>
-            <div className="group bg-white p-8 rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-300 hover:-translate-y-2 border border-gray-100">
-              <div className="text-6xl mb-4">🔗</div>
-              <h3 className="text-2xl font-bold mb-3">200+ Integrations</h3>
-              <p className="text-gray-600 leading-relaxed">Connect with imaging, payments, and all your favorite tools.</p>
-              <div className="mt-4 text-blue-600 font-semibold group-hover:translate-x-2 transition">Learn more →</div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* How It Works */}
-      <section className="py-20 bg-gray-50">
-        <div className="container mx-auto px-6">
-          <div className="text-center mb-16">
-            <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">Simple Setup</span>
-            <h2 className="text-4xl font-bold mt-2 mb-4">How SmileSync Works</h2>
-            <p className="text-xl text-gray-600">Get started in minutes, not weeks</p>
-          </div>
-          <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto">
-            <div className="text-center">
-              <div className="w-20 h-20 bg-gradient-to-r from-blue-600 to-teal-500 rounded-full flex items-center justify-center text-white text-2xl font-bold mx-auto mb-4">1</div>
-              <h3 className="text-xl font-bold mb-2">Sign Up</h3>
-              <p className="text-gray-600">Create your account in under 2 minutes</p>
-            </div>
-            <div className="text-center">
-              <div className="w-20 h-20 bg-gradient-to-r from-blue-600 to-teal-500 rounded-full flex items-center justify-center text-white text-2xl font-bold mx-auto mb-4">2</div>
-              <h3 className="text-xl font-bold mb-2">Connect Your Practice</h3>
-              <p className="text-gray-600">Import patients and staff in one click</p>
-            </div>
-            <div className="text-center">
-              <div className="w-20 h-20 bg-gradient-to-r from-blue-600 to-teal-500 rounded-full flex items-center justify-center text-white text-2xl font-bold mx-auto mb-4">3</div>
-              <h3 className="text-xl font-bold mb-2">Start Saving Time</h3>
-              <p className="text-gray-600">Let AI handle the busywork instantly</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Testimonials */}
-      <section className="py-20 bg-white">
-        <div className="container mx-auto px-6 max-w-4xl">
-          <div className="text-center mb-12">
-            <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">Testimonials</span>
-            <h2 className="text-4xl font-bold mt-2">What Our Clients Say</h2>
-          </div>
-          <div className="grid md:grid-cols-2 gap-8">
-            <div className="bg-gray-50 p-8 rounded-2xl border border-gray-100">
-              <div className="text-yellow-400 text-xl mb-3">⭐⭐⭐⭐⭐</div>
-              <p className="text-gray-700 italic mb-4">"The AI receptionist paid for itself in the first month. SmileSync has transformed our practice."</p>
+            <form onSubmit={handleResetPassword} className="space-y-4">
               <div>
-                <p className="font-bold">Dr. Sarah Chen</p>
-                <p className="text-gray-500 text-sm">SmileWorks Dental, NYC</p>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Email Address
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <span className="text-gray-400">📧</span>
+                  </div>
+                  <input
+                    type="email"
+                    required
+                    className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
+                    placeholder="Enter your email"
+                    value={resetEmail}
+                    onChange={(e) => setResetEmail(e.target.value)}
+                  />
+                </div>
               </div>
-            </div>
-            <div className="bg-gray-50 p-8 rounded-2xl border border-gray-100">
-              <div className="text-yellow-400 text-xl mb-3">⭐⭐⭐⭐⭐</div>
-              <p className="text-gray-700 italic mb-4">"No-shows dropped by 40% in just 2 months. We've never been more efficient."</p>
-              <div>
-                <p className="font-bold">Dr. James Wilson</p>
-                <p className="text-gray-500 text-sm">Wilson Dental Group, LA</p>
+
+              {resetError && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-3">
+                  <div className="flex items-start gap-2">
+                    <span>❌</span>
+                    <p className="text-sm text-red-800">{resetError}</p>
+                  </div>
+                </div>
+              )}
+
+              {resetSuccess && (
+                <div className="bg-green-50 border border-green-200 rounded-xl p-3 animate-fadeIn">
+                  <div className="flex items-start gap-2">
+                    <span>✅</span>
+                    <p className="text-sm text-green-800">{resetSuccess}</p>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <button 
+                  type="submit" 
+                  disabled={resetLoading} 
+                  className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 text-white py-3 rounded-xl hover:from-blue-700 hover:to-indigo-700 transition font-medium shadow-lg shadow-blue-500/25 disabled:opacity-50"
+                >
+                  {resetLoading ? 'Sending...' : 'Send Instructions'}
+                </button>
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    setShowResetModal(false)
+                    setResetError('')
+                    setResetSuccess('')
+                    setResetEmail('')
+                  }} 
+                  className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-xl transition font-medium"
+                >
+                  Cancel
+                </button>
               </div>
-            </div>
+            </form>
           </div>
         </div>
-      </section>
+      )}
 
-      {/* Stats */}
-      <section className="py-16 bg-gradient-to-r from-blue-600 to-teal-500">
-        <div className="container mx-auto px-6">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-8 text-center text-white">
-            <div>
-              <div className="text-4xl font-bold animate-pulse">2,500+</div>
-              <div className="text-sm opacity-90">Clinics Worldwide</div>
-            </div>
-            <div>
-              <div className="text-4xl font-bold animate-pulse">30%</div>
-              <div className="text-sm opacity-90">Fewer No-Shows</div>
-            </div>
-            <div>
-              <div className="text-4xl font-bold animate-pulse">99.9%</div>
-              <div className="text-sm opacity-90">Uptime Guarantee</div>
-            </div>
-            <div>
-              <div className="text-4xl font-bold animate-pulse">4.8/5</div>
-              <div className="text-sm opacity-90">User Rating</div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Blog Preview */}
-      <section className="py-20 bg-white">
-        <div className="container mx-auto px-6 max-w-5xl">
-          <div className="text-center mb-12">
-            <span className="text-blue-600 font-semibold text-sm uppercase tracking-wider">Resources</span>
-            <h2 className="text-4xl font-bold mt-2">Latest Insights</h2>
-          </div>
-          <div className="grid md:grid-cols-3 gap-6">
-            <div className="bg-gray-50 p-6 rounded-xl border border-gray-100 hover:shadow-lg transition">
-              <div className="text-3xl mb-3">📈</div>
-              <h3 className="font-bold mb-2">5 Ways AI Improves Patient Retention</h3>
-              <p className="text-gray-600 text-sm">Discover how AI can help you build stronger patient relationships.</p>
-              <a href="#" className="text-blue-600 text-sm font-semibold mt-3 inline-block">Read more →</a>
-            </div>
-            <div className="bg-gray-50 p-6 rounded-xl border border-gray-100 hover:shadow-lg transition">
-              <div className="text-3xl mb-3">💡</div>
-              <h3 className="font-bold mb-2">Reducing No-Shows by 40%</h3>
-              <p className="text-gray-600 text-sm">Learn the proven strategies to minimize appointment cancellations.</p>
-              <a href="#" className="text-blue-600 text-sm font-semibold mt-3 inline-block">Read more →</a>
-            </div>
-            <div className="bg-gray-50 p-6 rounded-xl border border-gray-100 hover:shadow-lg transition">
-              <div className="text-3xl mb-3">🚀</div>
-              <h3 className="font-bold mb-2">The Future of Dental Tech</h3>
-              <p className="text-gray-600 text-sm">Emerging trends that will shape dental practices in 2026.</p>
-              <a href="#" className="text-blue-600 text-sm font-semibold mt-3 inline-block">Read more →</a>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Newsletter */}
-      <section className="py-16 bg-gray-900 text-white">
-        <div className="container mx-auto px-6 text-center">
-          <h2 className="text-3xl font-bold mb-4">Stay Updated</h2>
-          <p className="text-gray-400 mb-6">Subscribe to get the latest dental tech insights</p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center max-w-md mx-auto">
-            <input 
-              type="email" 
-              placeholder="Your email address"
-              className="px-4 py-3 rounded-full text-gray-900 flex-1 outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            <button className="bg-gradient-to-r from-blue-600 to-teal-500 text-white px-6 py-3 rounded-full hover:shadow-lg transition">
-              Subscribe
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {/* CTA - Removed the duplicate login button */}
-      <section className="py-20 bg-white">
-        <div className="container mx-auto px-6 text-center">
-          <h2 className="text-4xl font-bold mb-4">Ready to Transform Your Practice?</h2>
-          <p className="text-xl text-gray-600 mb-10">Join 2,500+ clinics already saving time with SmileSync</p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-            <button className="bg-gradient-to-r from-blue-600 to-teal-500 text-white px-12 py-4 rounded-full text-lg font-semibold hover:shadow-xl transition transform hover:scale-105">
-              Start Free Trial
-            </button>
-            <button className="border-2 border-blue-600 text-blue-600 px-8 py-4 rounded-full text-lg font-semibold hover:bg-blue-50 transition transform hover:scale-105">
-              Watch Demo
-            </button>
-          </div>
-          <p className="mt-4 text-gray-400">No credit card required. Cancel anytime.</p>
-        </div>
-      </section>
-
-      {/* Footer */}
-      <footer className="bg-gray-900 text-white py-12">
-        <div className="container mx-auto px-6">
-          <div className="grid md:grid-cols-4 gap-8 mb-8">
-            <div>
-              <h3 className="text-2xl font-bold mb-4">🦷 SmileSync</h3>
-              <p className="text-gray-400">AI-Powered Dental Practice Management</p>
-              <div className="flex gap-4 mt-4">
-                <a href="https://instagram.com/smilesynclk" target="_blank" rel="noopener noreferrer" className="text-2xl hover:text-pink-400 transition-colors" aria-label="Instagram">
-                  <span className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-3 py-2 rounded-full inline-flex items-center justify-center w-10 h-10">📷</span>
-                </a>
-                <a href="https://facebook.com/yourprofile" target="_blank" rel="noopener noreferrer" className="text-2xl hover:text-blue-400 transition-colors" aria-label="Facebook">
-                  <span className="bg-blue-600 text-white px-3 py-2 rounded-full inline-flex items-center justify-center w-10 h-10">👍</span>
-                </a>
-                <a href="https://linkedin.com/company/smilesync" target="_blank" rel="noopener noreferrer" className="text-2xl hover:text-blue-500 transition-colors" aria-label="LinkedIn">
-                  <span className="bg-blue-700 text-white px-3 py-2 rounded-full inline-flex items-center justify-center w-10 h-10">💼</span>
-                </a>
-                <a href="https://youtube.com/@SmileSynclk" target="_blank" rel="noopener noreferrer" className="text-2xl hover:text-red-500 transition-colors" aria-label="YouTube">
-                  <span className="bg-red-600 text-white px-3 py-2 rounded-full inline-flex items-center justify-center w-10 h-10">▶️</span>
-                </a>
-                <a href="https://twitter.com/smilesync" target="_blank" rel="noopener noreferrer" className="text-2xl hover:text-blue-400 transition-colors" aria-label="Twitter">
-                  <span className="bg-gray-800 text-white px-3 py-2 rounded-full inline-flex items-center justify-center w-10 h-10">🐦</span>
-                </a>
-              </div>
-            </div>
-            <div>
-              <h4 className="font-semibold mb-4">Product</h4>
-              <ul className="space-y-2 text-gray-400">
-                <li><a href="/features" className="hover:text-white transition">Features</a></li>
-                <li><a href="/pricing" className="hover:text-white transition">Pricing</a></li>
-                <li><a href="#" className="hover:text-white transition">Integrations</a></li>
-                <li><a href="#" className="hover:text-white transition">Changelog</a></li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold mb-4">Company</h4>
-              <ul className="space-y-2 text-gray-400">
-                <li><a href="/about" className="hover:text-white transition">About</a></li>
-                <li><a href="#" className="hover:text-white transition">Blog</a></li>
-                <li><a href="#" className="hover:text-white transition">Careers</a></li>
-                <li><a href="#" className="hover:text-white transition">Press</a></li>
-              </ul>
-            </div>
-            <div>
-              <h4 className="font-semibold mb-4">Support</h4>
-              <ul className="space-y-2 text-gray-400">
-                <li><a href="/contact" className="hover:text-white transition">Contact</a></li>
-                <li><a href="#" className="hover:text-white transition">Documentation</a></li>
-                <li><a href="#" className="hover:text-white transition">FAQ</a></li>
-                <li><a href="#" className="hover:text-white transition">Status</a></li>
-              </ul>
-            </div>
-          </div>
-          <div className="border-t border-gray-800 pt-8 text-center text-gray-400">
-            <p>© 2026 SmileSync. All rights reserved.</p>
-          </div>
-        </div>
-      </footer>
+      <style jsx>{`
+        @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          25% { transform: translateX(-8px); }
+          75% { transform: translateX(8px); }
+        }
+        .animate-shake {
+          animation: shake 0.5s ease-in-out;
+        }
+        
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+            transform: scale(0.95);
+          }
+          to {
+            opacity: 1;
+            transform: scale(1);
+          }
+        }
+        .animate-fadeIn {
+          animation: fadeIn 0.3s ease-out;
+        }
+      `}</style>
     </div>
   )
 }

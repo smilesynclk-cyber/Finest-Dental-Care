@@ -4,8 +4,8 @@ import LayoutWrapper from '@/components/LayoutWrapper'
 import { CurrencyProvider } from '@/lib/currency-context'
 
 export const metadata: Metadata = {
-  title: 'Smile Sync',
-  description: 'Smile Sync Dental Clinic Managment System',
+  title: 'Finest Dental Care',
+  description: 'Finest Dental Care',
 }
 
 export default function RootLayout({

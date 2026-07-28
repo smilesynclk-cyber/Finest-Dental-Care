@@ -57,7 +57,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
                   e.currentTarget.style.display = 'none'
                 }}
               />
-              <span className="font-semibold text-gray-800">Smile Sync Dental Clinic Management System</span>
+              <span className="font-semibold text-gray-800">Finest Dental Care</span>
             </div>
             
             {/* Right Side */}

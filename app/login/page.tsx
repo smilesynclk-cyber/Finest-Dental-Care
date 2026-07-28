@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import Link from 'next/link'
 
-export default function LoginPage() {
+export default function HomePage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -190,7 +190,7 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 md:p-10 border border-gray-100">
-        {/* Back to Home Link */}
+        {/* Back to Home Link - Optional, you can remove if you want */}
         <Link 
           href="/" 
           className="inline-flex items-center gap-2 text-sm text-gray-500 hover:text-blue-600 transition mb-6 group"
@@ -203,20 +203,20 @@ export default function LoginPage() {
         <div className="text-center mb-8">
           <div className="relative">
             <div className="w-24 h-24 mx-auto mb-4 relative">
-              <Image
-                src="/logo.png"
-                alt="Smile Sync Logo"
-                width={96}
-                height={96}
-                className="object-contain rounded-2xl shadow-lg"
-                priority
-              />
+             <Image
+  src="/logo.png"
+  alt="Smile Sync Logo"
+  width={96}
+  height={96}
+  className="object-contain rounded-2xl shadow-lg"
+  priority
+/>
             </div>
             <div className="absolute -inset-1 bg-gradient-to-r from-blue-400 to-indigo-400 rounded-2xl opacity-20 blur-lg -z-10"></div>
           </div>
           
           <h1 className="text-2xl font-bold text-gray-800">
-            Smile Sync
+            Finest Dental Care
           </h1>
           <p className="text-sm text-gray-500 mt-1">Dental Clinic Management System</p>
           <div className="mt-4 h-0.5 w-12 bg-gradient-to-r from-blue-400 to-indigo-400 mx-auto rounded-full"></div>
